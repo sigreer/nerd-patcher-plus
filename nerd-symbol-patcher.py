@@ -43,13 +43,117 @@ from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError, HTTPError
 
+FONTFORGE_AVAILABLE = False
+PSMAT_AVAILABLE = False
+
 try:
     import fontforge
-    import psMat
+    FONTFORGE_AVAILABLE = True
 except ImportError:
-    print("Error: fontforge module not found.", file=sys.stderr)
-    print("Install with: sudo pacman -S fontforge", file=sys.stderr)
-    sys.exit(1)
+    fontforge = None
+
+try:
+    import psMat
+    PSMAT_AVAILABLE = True
+except ImportError:
+    psMat = None
+
+
+# Colors (defined early for use in dependency checking)
+RED = "\033[0;31m"
+GREEN = "\033[0;32m"
+YELLOW = "\033[1;33m"
+BLUE = "\033[0;34m"
+NC = "\033[0m"
+
+
+def print_info(msg):
+    print(f"{BLUE}[INFO]{NC} {msg}", file=sys.stderr)
+
+
+def print_success(msg):
+    print(f"{GREEN}[SUCCESS]{NC} {msg}", file=sys.stderr)
+
+
+def print_warning(msg):
+    print(f"{YELLOW}[WARNING]{NC} {msg}", file=sys.stderr)
+
+
+def print_error(msg):
+    print(f"{RED}[ERROR]{NC} {msg}", file=sys.stderr)
+
+
+def check_dependencies(verbose: bool = False) -> tuple[bool, list[str]]:
+    """Check if all required dependencies are available.
+
+    Args:
+        verbose: If True, print detailed status for each dependency
+
+    Returns:
+        Tuple of (all_ok, list_of_missing_dependencies)
+    """
+    missing = []
+
+    # Check fontforge Python module
+    if not FONTFORGE_AVAILABLE:
+        missing.append("fontforge")
+        if verbose:
+            print_error("fontforge module: NOT FOUND")
+            print_info("  Install with: sudo pacman -S fontforge")
+    elif verbose:
+        print_success(f"fontforge module: OK (version {fontforge.version()})")
+
+    # Check psMat module (part of fontforge)
+    if not PSMAT_AVAILABLE:
+        missing.append("psMat")
+        if verbose:
+            print_error("psMat module: NOT FOUND")
+            print_info("  This should be included with fontforge")
+    elif verbose:
+        print_success("psMat module: OK")
+
+    # Check font directory accessibility
+    font_dir = Path.home() / ".local/share/fonts/NerdFontsSymbolsOnly"
+    if verbose:
+        if font_dir.exists():
+            if os.access(font_dir, os.W_OK):
+                print_success(f"Font directory: OK ({font_dir})")
+            else:
+                print_warning(f"Font directory: EXISTS but not writable ({font_dir})")
+        else:
+            # Check if parent is writable (can create the directory)
+            parent = font_dir.parent
+            if parent.exists() and os.access(parent, os.W_OK):
+                print_info(f"Font directory: Will be created at {font_dir}")
+            else:
+                print_warning(f"Font directory: Cannot create ({font_dir})")
+
+    all_ok = len(missing) == 0
+
+    if verbose:
+        print("")
+        if all_ok:
+            print_success("All dependencies satisfied!")
+        else:
+            print_error(f"Missing dependencies: {', '.join(missing)}")
+
+    return (all_ok, missing)
+
+
+def require_dependencies():
+    """Exit with error if required dependencies are missing."""
+    ok, missing = check_dependencies(verbose=False)
+    if not ok:
+        print("Error: Missing required dependencies.", file=sys.stderr)
+        for dep in missing:
+            if dep == "fontforge":
+                print(f"  - {dep}: Install with 'sudo pacman -S fontforge'", file=sys.stderr)
+            elif dep == "psMat":
+                print(f"  - {dep}: Should be included with fontforge package", file=sys.stderr)
+            else:
+                print(f"  - {dep}", file=sys.stderr)
+        print("\nRun with --check-deps for detailed diagnostics.", file=sys.stderr)
+        sys.exit(1)
 
 
 @contextmanager
@@ -108,29 +212,6 @@ PROVIDERS = {
     },
 }
 DEFAULT_PROVIDER_ORDER = ["simple", "lucide", "material", "bootstrap"]
-
-# Colors
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-BLUE = "\033[0;34m"
-NC = "\033[0m"
-
-
-def print_info(msg):
-    print(f"{BLUE}[INFO]{NC} {msg}", file=sys.stderr)
-
-
-def print_success(msg):
-    print(f"{GREEN}[SUCCESS]{NC} {msg}", file=sys.stderr)
-
-
-def print_warning(msg):
-    print(f"{YELLOW}[WARNING]{NC} {msg}", file=sys.stderr)
-
-
-def print_error(msg):
-    print(f"{RED}[ERROR]{NC} {msg}", file=sys.stderr)
 
 
 def resolve_provider_name(name: str) -> str | None:
@@ -1290,6 +1371,7 @@ Provider aliases:
     mode.add_argument("-t", "--test", metavar="FONT", help="Test mode - display all icons in font file")
     mode.add_argument("-R", "--remove", metavar="NAME", help="Remove a custom symbol by name from all font files")
     mode.add_argument("--rename", nargs=2, metavar=("OLD", "NEW"), help="Rename a custom symbol in all font files")
+    mode.add_argument("--check-deps", action="store_true", help="Check if all dependencies are installed and exit")
 
     # Output format options
     parser.add_argument("-a", "--all-formats", action="store_true", help="Show all encoding formats (Unicode, UTF-8 hex, JS/GJS escape)")
@@ -1308,6 +1390,16 @@ Provider aliases:
     parser.add_argument("-S", "--start", metavar="HEX", help="Starting Unicode codepoint in hex")
 
     args = parser.parse_args()
+
+    # Dependency check mode - runs before requiring dependencies
+    if args.check_deps:
+        print_info("Checking dependencies...")
+        print("")
+        ok, _ = check_dependencies(verbose=True)
+        return 0 if ok else 1
+
+    # Require dependencies for all other operations
+    require_dependencies()
 
     # List mode
     if args.list:
