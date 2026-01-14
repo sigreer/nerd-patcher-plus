@@ -1385,8 +1385,8 @@ Provider aliases:
     parser.add_argument("-u", "--update", metavar="REF", help="Update existing symbol by name or codepoint (e.g., 'myicon' or 'ue069')")
     parser.add_argument("-d", "--duplicate", action="store_true", help="Add copies at new codepoints (keeps existing icons at old locations)")
     parser.add_argument("-f", "--fonts", metavar="PATTERNS", default="symbols", help="Comma-separated Nerd Font patterns (default: symbols)")
-    parser.add_argument("-O", "--output", metavar="PATH", default="./patched-fonts", help="Output path for patched fonts")
-    parser.add_argument("-o", "--options", metavar="OPTS", default="install", help="Options: install, cleanup (default: install)")
+    parser.add_argument("-O", "--output", metavar="PATH", help="Output path for patched fonts (default: temp dir, cleaned up after install)")
+    parser.add_argument("--no-install", action="store_true", help="Don't install fonts (requires -O to specify output path)")
     parser.add_argument("-S", "--start", metavar="HEX", help="Starting Unicode codepoint in hex")
 
     args = parser.parse_args()
@@ -1538,17 +1538,28 @@ Provider aliases:
     else:
         print_info(f"Using providers: {', '.join(DEFAULT_PROVIDER_ORDER)} (default order)")
 
+    # Validate --no-install requires -O
+    if args.no_install and not args.output:
+        print_error("--no-install requires -O/--output to specify where to save patched fonts")
+        return 1
+
     # Create temp directory for icons
     temp_dir = Path(tempfile.mkdtemp())
     icons_dir = temp_dir / "icons"
     icons_dir.mkdir()
 
-    failed_icons = []
+    # Determine output path and install behavior
+    if args.output:
+        output_path = Path(args.output)
+        use_temp_output = False
+    else:
+        output_path = temp_dir / "patched-fonts"
+        use_temp_output = True
 
-    # Parse options early so they're available in finally block
-    options = [o.strip().lower() for o in args.options.split(",")]
-    do_install = "install" in options
-    do_cleanup = "cleanup" in options
+    output_path.mkdir(parents=True, exist_ok=True)
+    do_install = not args.no_install
+
+    failed_icons = []
 
     try:
         # Classify inputs as local or remote
@@ -1614,9 +1625,6 @@ Provider aliases:
                 return 1
 
         # Patch fonts
-        output_path = Path(args.output)
-        output_path.mkdir(parents=True, exist_ok=True)
-
         print_info("Patching fonts with icons...")
 
         all_mappings = []
@@ -1658,21 +1666,16 @@ Provider aliases:
             print_warning("=" * 42)
 
         print_success("=" * 42)
-        print_success(f"All done! Patched fonts are in: {output_path}")
-
         if do_install:
-            print_info("Fonts have been installed and are ready to use")
+            print_success("All done! Fonts installed and ready to use")
             print_info(f"  Install location: {FONT_DIR_USER}")
         else:
-            print_info("To install fonts, run with -o install option")
+            print_success(f"All done! Patched fonts saved to: {output_path}")
+            print_info("To install, run without --no-install flag")
 
     finally:
-        if do_cleanup:
-            print_info("Cleaning up temporary files...")
-            shutil.rmtree(temp_dir)
-            print_success("Cleanup complete")
-        else:
-            print_info(f"Temporary files kept in: {temp_dir}")
+        # Always clean up temp directory (includes output if using temp output)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     return 0
 
