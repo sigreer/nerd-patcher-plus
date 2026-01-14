@@ -460,7 +460,8 @@ def download_icon_from_providers(
     icon_name: str,
     dest_dir: Path,
     providers: list[str] | None = None,
-    custom_name: str | None = None
+    custom_name: str | None = None,
+    verbose: bool = False
 ) -> tuple[bool, str | None]:
     """Download icon from providers in order.
 
@@ -475,7 +476,8 @@ def download_icon_from_providers(
         try:
             with urlopen(url, timeout=10) as response:
                 dest.write_bytes(response.read())
-            print_success(f"  Downloaded {icon_name} from {provider}" + (f" as '{dest_name}'" if custom_name else ""))
+            if verbose:
+                print_success(f"  Downloaded {icon_name} from {provider}" + (f" as '{dest_name}'" if custom_name else ""))
             return (True, None)
         except (URLError, HTTPError):
             continue  # Try next provider
@@ -706,15 +708,17 @@ def parse_symbol_reference(ref: str) -> tuple[str | None, int | None]:
     return (ref, None)
 
 
-def update_symbol(ref: str, svg_path: Path):
+def update_symbol(ref: str, svg_path: Path, verbose: bool = False):
     """Update a specific symbol in all installed Nerd Font files.
 
     Args:
         ref: Symbol reference (name like 'myicon' or codepoint like '\\ue069')
         svg_path: Path to the SVG file to use for the update
+        verbose: Show detailed output
     """
-    print_info(f"Updating symbol: {ref}")
-    print_info("=" * 42)
+    if verbose:
+        print_info(f"Updating symbol: {ref}")
+        print_info("=" * 42)
 
     # Parse the reference
     name, codepoint = parse_symbol_reference(ref)
@@ -737,6 +741,7 @@ def update_symbol(ref: str, svg_path: Path):
 
     updated_count = 0
     target_glyph_name = f"sgc_{name}" if name else None
+    updated_codepoint = None
 
     for font_file in font_files:
         try:
@@ -754,17 +759,20 @@ def update_symbol(ref: str, svg_path: Path):
                     break
 
             if not found_glyph:
-                if name:
-                    print_info(f"  Symbol '{name}' not found in {font_file.name}")
-                else:
-                    print_info(f"  Codepoint U+{codepoint:04X} not found in {font_file.name}")
+                if verbose:
+                    if name:
+                        print_info(f"  Symbol '{name}' not found in {font_file.name}")
+                    else:
+                        print_info(f"  Codepoint U+{codepoint:04X} not found in {font_file.name}")
                 font.close()
                 continue
 
             glyph_cp = found_glyph.encoding
             glyph_name = found_glyph.glyphname
+            updated_codepoint = glyph_cp
 
-            print_info(f"  Found {glyph_name} at U+{glyph_cp:04X} in {font_file.name}")
+            if verbose:
+                print_info(f"  Found {glyph_name} at U+{glyph_cp:04X} in {font_file.name}")
 
             # Clear and reimport the glyph
             found_glyph.clear()
@@ -791,7 +799,8 @@ def update_symbol(ref: str, svg_path: Path):
             with suppress_fontforge_output():
                 font.generate(str(font_file))
 
-            print_success(f"  Updated in {font_file.name}")
+            if verbose:
+                print_success(f"  Updated in {font_file.name}")
             updated_count += 1
 
             font.close()
@@ -799,16 +808,23 @@ def update_symbol(ref: str, svg_path: Path):
         except Exception as e:
             print_error(f"  Error processing {font_file.name}: {e}")
 
-    print("", file=sys.stderr)
+    if verbose:
+        print("", file=sys.stderr)
     if updated_count > 0:
-        print_success(f"Updated symbol in {updated_count} font file(s)")
-        print_info("Refreshing font cache...")
+        if verbose:
+            print_success(f"Updated symbol in {updated_count} font file(s)")
+            print_info("Refreshing font cache...")
         os.system(f"fc-cache -f '{FONT_DIR_USER}'")
 
         # Display the updated symbol info
         display_name = name if name else f"U+{codepoint:04X}"
-        print_info(f"Updated symbol: {display_name}")
-        print_warning("NOTE: Restart your terminal/applications to see changes")
+        if verbose:
+            print_info(f"Updated symbol: {display_name}")
+            print_warning("NOTE: Restart your terminal/applications to see changes")
+        else:
+            # Quiet mode: just show essential info
+            js_escape = get_js_escape(updated_codepoint) if updated_codepoint else ""
+            print_success(f"Updated {display_name} at U+{updated_codepoint:04X} (escape: {js_escape})")
     else:
         if name:
             print_warning(f"Symbol '{name}' was not found in any font files")
@@ -972,16 +988,18 @@ def download_icons(icon_names: list[str], dest_dir: Path) -> list[str]:
     return failed
 
 
-def copy_local_svgs(svg_paths: list[str], dest_dir: Path, custom_name: str | None = None) -> list[str]:
+def copy_local_svgs(svg_paths: list[str], dest_dir: Path, custom_name: str | None = None, verbose: bool = False) -> list[str]:
     """Copy local SVG files to dest_dir. Returns list of failed paths.
 
     Args:
         svg_paths: List of local SVG file paths
         dest_dir: Destination directory
         custom_name: Custom name for single icon (only applied if len(svg_paths) == 1)
+        verbose: Show detailed output
     """
     failed = []
-    print_info("Processing local SVG files...")
+    if verbose:
+        print_info("Processing local SVG files...")
 
     for i, svg_path in enumerate(svg_paths):
         svg_path = svg_path.strip()
@@ -1004,10 +1022,12 @@ def copy_local_svgs(svg_paths: list[str], dest_dir: Path, custom_name: str | Non
         icon_name = custom_name if (custom_name and len(svg_paths) == 1) else src.stem
         dest = dest_dir / f"{icon_name}.svg"
 
-        print_info(f"  Copying {src.name} as '{icon_name}'...")
+        if verbose:
+            print_info(f"  Copying {src.name} as '{icon_name}'...")
         try:
             shutil.copy(src, dest)
-            print_success(f"    Copied {src.name}" + (f" as '{icon_name}'" if custom_name else ""))
+            if verbose:
+                print_success(f"    Copied {src.name}" + (f" as '{icon_name}'" if custom_name else ""))
         except Exception as e:
             print_error(f"    Failed to copy {src.name}: {e}")
             failed.append(f"{svg_path} (copy failed)")
@@ -1015,9 +1035,10 @@ def copy_local_svgs(svg_paths: list[str], dest_dir: Path, custom_name: str | Non
     return failed
 
 
-def find_fonts(patterns: list[str]) -> list[Path]:
+def find_fonts(patterns: list[str], verbose: bool = False) -> list[Path]:
     """Find matching Nerd Font files."""
-    print_info("Searching for matching Nerd Fonts...")
+    if verbose:
+        print_info("Searching for matching Nerd Fonts...")
 
     if not FONT_DIR_USER.exists():
         print_error(f"Font directory not found: {FONT_DIR_USER}")
@@ -1038,19 +1059,21 @@ def find_fonts(patterns: list[str]) -> list[Path]:
     # Deduplicate
     unique = list(dict.fromkeys(found))
 
-    print_success(f"Found {len(unique)} font file(s)")
-    for font in unique:
-        print_info(f"  - {font.name}")
+    if verbose:
+        print_success(f"Found {len(unique)} font file(s)")
+        for font in unique:
+            print_info(f"  - {font.name}")
 
     return unique
 
 
-def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoint: int | None = None, update: bool = False, duplicate: bool = False):
+def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoint: int | None = None, update: bool = False, duplicate: bool = False, verbose: bool = False):
     """Patch a font with icons from icon_dir. If update=True, overwrite existing glyphs. If duplicate=True, add copies at new codepoints."""
     # Flush output before fontforge operations to prevent interleaving
     sys.stdout.flush()
     sys.stderr.flush()
-    print(f"Opening font: {font_path}")
+    if verbose:
+        print(f"Opening font: {font_path}")
     # Suppress fontforge output during font open to prevent problematic characters
     with suppress_fontforge_output():
         font = fontforge.open(str(font_path))
@@ -1065,7 +1088,8 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
         return low_byte >= 0x20  # 0x20 = space, first printable ASCII
 
     if start_codepoint:
-        print(f"Using specified starting codepoint: U+{start_codepoint:04X}")
+        if verbose:
+            print(f"Using specified starting codepoint: U+{start_codepoint:04X}")
     else:
         occupied = set()
         for glyph in font.glyphs():
@@ -1091,10 +1115,12 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
                 consecutive_free = 0
 
         if consecutive_free < 100:
-            print("Warning: BMP Private Use Area is crowded, using Plane 15 PUA (U+F0000+)")
+            if verbose:
+                print("Warning: BMP Private Use Area is crowded, using Plane 15 PUA (U+F0000+)")
             start_codepoint = 0xF0000
         else:
-            print(f"Auto-detected safe starting codepoint: U+{start_codepoint:04X}")
+            if verbose:
+                print(f"Auto-detected safe starting codepoint: U+{start_codepoint:04X}")
 
     # Get icon files
     icon_files = sorted(icon_dir.glob("*.svg"))
@@ -1105,9 +1131,11 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
         if glyph.glyphname and glyph.glyphname.startswith("sgc_"):
             icon_name = glyph.glyphname.replace("sgc_", "")
             existing_icons[icon_name] = glyph.encoding
-            print(f"  Found existing icon: {icon_name} at U+{glyph.encoding:04X}")
+            if verbose:
+                print(f"  Found existing icon: {icon_name} at U+{glyph.encoding:04X}")
 
-    print(f"Processing {len(icon_files)} icons ({len(existing_icons)} already exist)...")
+    if verbose:
+        print(f"Processing {len(icon_files)} icons ({len(existing_icons)} already exist)...")
 
     mappings = []
     new_mappings = []
@@ -1123,11 +1151,13 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
             existing_cp = existing_icons[icon_name]
             if duplicate:
                 # Add copy at new codepoint (don't modify existing)
-                print(f"  Duplicating {icon_name} (exists at U+{existing_cp:04X}, adding copy)")
+                if verbose:
+                    print(f"  Duplicating {icon_name} (exists at U+{existing_cp:04X}, adding copy)")
                 # Fall through to add at new codepoint
             elif update:
                 # Update existing glyph - clear and reimport
-                print(f"  Updating {icon_name} at U+{existing_cp:04X}")
+                if verbose:
+                    print(f"  Updating {icon_name} at U+{existing_cp:04X}")
                 glyph = font[existing_cp]
                 glyph.clear()
                 glyph.importOutlines(str(icon_file))
@@ -1155,7 +1185,8 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
                 updated_count += 1
                 continue
             else:
-                print(f"  Skipping {icon_name} (already exists at U+{existing_cp:04X})")
+                if verbose:
+                    print(f"  Skipping {icon_name} (already exists at U+{existing_cp:04X})")
                 mappings.append((icon_name, existing_cp))
                 skipped_count += 1
                 continue
@@ -1175,7 +1206,8 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
         codepoint = current_cp
         current_cp += 1
 
-        print(f"  Adding {icon_name} at U+{codepoint:04X}")
+        if verbose:
+            print(f"  Adding {icon_name} at U+{codepoint:04X}")
         mappings.append((icon_name, codepoint))
         new_mappings.append((icon_name, codepoint))
         added_count += 1
@@ -1207,13 +1239,15 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
 
     # Save font
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Saving patched font to: {output_path}")
+    if verbose:
+        print(f"Saving patched font to: {output_path}")
     # Suppress fontforge output during font save/close to prevent problematic characters
     with suppress_fontforge_output():
         font.generate(str(output_path))
         font.close()
 
-    print(f"Successfully patched font! (Added: {added_count}, Updated: {updated_count}, Skipped: {skipped_count})")
+    if verbose:
+        print(f"Successfully patched font! (Added: {added_count}, Updated: {updated_count}, Skipped: {skipped_count})")
     # Flush after fontforge operations complete
     sys.stdout.flush()
     sys.stderr.flush()
@@ -1221,9 +1255,10 @@ def patch_font(font_path: Path, icon_dir: Path, output_path: Path, start_codepoi
     return mappings, new_mappings
 
 
-def install_fonts(output_path: Path):
+def install_fonts(output_path: Path, verbose: bool = False):
     """Install patched fonts to user font directory."""
-    print_info(f"Installing patched fonts to {FONT_DIR_USER}...")
+    if verbose:
+        print_info(f"Installing patched fonts to {FONT_DIR_USER}...")
     FONT_DIR_USER.mkdir(parents=True, exist_ok=True)
 
     installed = 0
@@ -1231,15 +1266,18 @@ def install_fonts(output_path: Path):
         if font_file.suffix.lower() in (".ttf", ".otf"):
             dest = FONT_DIR_USER / font_file.name
             shutil.copy(font_file, dest)
-            print_success(f"  Installed {font_file.name}")
+            if verbose:
+                print_success(f"  Installed {font_file.name}")
             installed += 1
 
-    print_info("Refreshing font cache...")
+    if verbose:
+        print_info("Refreshing font cache...")
     os.system(f"fc-cache -f '{FONT_DIR_USER}'")
-    print_success(f"Installed {installed} font(s)")
+    if verbose:
+        print_success(f"Installed {installed} font(s)")
 
 
-def save_to_log(new_mappings: list[tuple[str, int]]):
+def save_to_log(new_mappings: list[tuple[str, int]], verbose: bool = False):
     """Save newly patched icons to log file."""
     if not new_mappings:
         return
@@ -1268,10 +1306,11 @@ def save_to_log(new_mappings: list[tuple[str, int]]):
             f.write(f"{icon_name:<25} U+{codepoint:04X}    {char:<6} {utf8_hex:<12}\n")
         f.write("=" * 80 + "\n")
 
-    print_success(f"Saved {len(new_mappings)} new icon(s) to log: {ICON_LOG_FILE}")
+    if verbose:
+        print_success(f"Saved {len(new_mappings)} new icon(s) to log: {ICON_LOG_FILE}")
 
 
-def display_mappings(mappings: list[tuple[str, int]], new_mappings: list[tuple[str, int]], output_path: Path, installed: bool):
+def display_mappings(mappings: list[tuple[str, int]], new_mappings: list[tuple[str, int]], output_path: Path, installed: bool, verbose: bool = False):
     """Display icon mappings after patching.
 
     NOTE: We don't display the actual glyph character here because:
@@ -1284,50 +1323,60 @@ def display_mappings(mappings: list[tuple[str, int]], new_mappings: list[tuple[s
     sys.stderr.flush()
 
     if new_mappings:
-        print("", file=sys.stderr)
-        print_success("=" * 42)
-        print_success("Newly Patched Symbols:")
-        print_success("=" * 42)
-        print(f"{GREEN}{'ICON NAME':<25} {'UNICODE':<10} {'UTF-8 HEX':<12} {'JS/GJS ESCAPE'}{NC}", file=sys.stderr)
-        print_success("-" * 80)
-        for icon_name, codepoint in sorted(new_mappings):
-            char = chr(codepoint)
-            utf8_hex = char.encode("utf-8").hex()
-            js_escape = get_js_escape(codepoint)
-            print(f"{GREEN}{icon_name:<25} U+{codepoint:04X}    {utf8_hex:<12} {js_escape}{NC}", file=sys.stderr)
-        print_success("=" * 42)
-        print("", file=sys.stderr)
-
-        if installed:
-            print_info(f"Patched font location: {FONT_DIR_USER}")
-            for font_file in output_path.iterdir():
-                if font_file.suffix.lower() in (".ttf", ".otf"):
-                    print_info(f"  - {font_file.name}")
+        if verbose:
+            print("", file=sys.stderr)
+            print_success("=" * 42)
+            print_success("Newly Patched Symbols:")
+            print_success("=" * 42)
+            print(f"{GREEN}{'ICON NAME':<25} {'UNICODE':<10} {'UTF-8 HEX':<12} {'JS/GJS ESCAPE'}{NC}", file=sys.stderr)
+            print_success("-" * 80)
+            for icon_name, codepoint in sorted(new_mappings):
+                char = chr(codepoint)
+                utf8_hex = char.encode("utf-8").hex()
+                js_escape = get_js_escape(codepoint)
+                print(f"{GREEN}{icon_name:<25} U+{codepoint:04X}    {utf8_hex:<12} {js_escape}{NC}", file=sys.stderr)
+            print_success("=" * 42)
             print("", file=sys.stderr)
 
-        print_info("Usage examples:")
-        print_info("  - In GJS/AGS: use the JS/GJS Escape string")
-        print_info("  - Use printf with UTF-8 hex: printf '\\xef\\x98\\xa9'")
-        print_info("  - View glyphs after restarting terminal: nerd -l")
-        print("", file=sys.stderr)
-        print_info(f"New icons logged to: {ICON_LOG_FILE}")
-        print_warning("NOTE: Restart your terminal to see updated glyphs")
+            if installed:
+                print_info(f"Patched font location: {FONT_DIR_USER}")
+                for font_file in output_path.iterdir():
+                    if font_file.suffix.lower() in (".ttf", ".otf"):
+                        print_info(f"  - {font_file.name}")
+                print("", file=sys.stderr)
+
+            print_info("Usage examples:")
+            print_info("  - In GJS/AGS: use the JS/GJS Escape string")
+            print_info("  - Use printf with UTF-8 hex: printf '\\xef\\x98\\xa9'")
+            print_info("  - View glyphs after restarting terminal: nerd -l")
+            print("", file=sys.stderr)
+            print_info(f"New icons logged to: {ICON_LOG_FILE}")
+            print_warning("NOTE: Restart your terminal to see updated glyphs")
+        else:
+            # Quiet mode: just show the newly added icons concisely
+            for icon_name, codepoint in sorted(new_mappings):
+                js_escape = get_js_escape(codepoint)
+                print_success(f"Added {icon_name} at U+{codepoint:04X} (escape: {js_escape})")
 
     elif mappings:
-        print("", file=sys.stderr)
-        print_info("=" * 42)
-        print_info("No new icons added (all icons already exist in font)")
-        print_info("=" * 42)
-        print(f"{'ICON NAME':<25} {'UNICODE':<10} {'UTF-8 HEX':<12} {'JS/GJS ESCAPE'}", file=sys.stderr)
-        print_info("-" * 80)
-        for icon_name, codepoint in sorted(mappings):
-            char = chr(codepoint)
-            utf8_hex = char.encode("utf-8").hex()
-            js_escape = get_js_escape(codepoint)
-            print(f"{icon_name:<25} U+{codepoint:04X}    {utf8_hex:<12} {js_escape}", file=sys.stderr)
-        print_info("=" * 42)
-        print("", file=sys.stderr)
-        print_info("View all patched symbols: nerd -l")
+        if verbose:
+            print("", file=sys.stderr)
+            print_info("=" * 42)
+            print_info("No new icons added (all icons already exist in font)")
+            print_info("=" * 42)
+            print(f"{'ICON NAME':<25} {'UNICODE':<10} {'UTF-8 HEX':<12} {'JS/GJS ESCAPE'}", file=sys.stderr)
+            print_info("-" * 80)
+            for icon_name, codepoint in sorted(mappings):
+                char = chr(codepoint)
+                utf8_hex = char.encode("utf-8").hex()
+                js_escape = get_js_escape(codepoint)
+                print(f"{icon_name:<25} U+{codepoint:04X}    {utf8_hex:<12} {js_escape}", file=sys.stderr)
+            print_info("=" * 42)
+            print("", file=sys.stderr)
+            print_info("View all patched symbols: nerd -l")
+        else:
+            # Quiet mode: just mention no new icons were added
+            print_info("No new icons added (already exist)")
 
 
 def main():
@@ -1388,6 +1437,7 @@ Provider aliases:
     parser.add_argument("-O", "--output", metavar="PATH", help="Output path for patched fonts (default: temp dir, cleaned up after install)")
     parser.add_argument("--no-install", action="store_true", help="Don't install fonts (requires -O to specify output path)")
     parser.add_argument("-S", "--start", metavar="HEX", help="Starting Unicode codepoint in hex")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed output (default: quiet)")
 
     args = parser.parse_args()
 
@@ -1466,17 +1516,17 @@ Provider aliases:
 
         if is_local:
             svg_path = Path(icon_input)
-            return update_symbol(args.update, svg_path)
+            return update_symbol(args.update, svg_path, args.verbose)
         else:
             # Download the icon using multi-provider search
             temp_dir = Path(tempfile.mkdtemp())
-            success, error = download_icon_from_providers(icon_input, temp_dir, providers)
+            success, error = download_icon_from_providers(icon_input, temp_dir, providers, verbose=args.verbose)
             if not success:
                 print_error(f"Failed to download icon '{icon_input}': {error}")
                 shutil.rmtree(temp_dir)
                 return 1
             svg_path = temp_dir / f"{icon_input}.svg"
-            result = update_symbol(args.update, svg_path)
+            result = update_symbol(args.update, svg_path, args.verbose)
             shutil.rmtree(temp_dir)
             return result
 
@@ -1531,12 +1581,13 @@ Provider aliases:
         # Replace inputs with matched files
         inputs = [str(f) for f in matched_files]
 
-    print_info("Starting icon patcher")
-    print_info("=" * 42)
-    if providers:
-        print_info(f"Using providers: {', '.join(providers)}")
-    else:
-        print_info(f"Using providers: {', '.join(DEFAULT_PROVIDER_ORDER)} (default order)")
+    if args.verbose:
+        print_info("Starting icon patcher")
+        print_info("=" * 42)
+        if providers:
+            print_info(f"Using providers: {', '.join(providers)}")
+        else:
+            print_info(f"Using providers: {', '.join(DEFAULT_PROVIDER_ORDER)} (default order)")
 
     # Validate --no-install requires -O
     if args.no_install and not args.output:
@@ -1584,11 +1635,12 @@ Provider aliases:
 
         # Download remote icons using multi-provider search
         if remote_icons:
-            print_info("Downloading icons from remote providers...")
+            if args.verbose:
+                print_info("Downloading icons from remote providers...")
             for icon_name in remote_icons:
                 # Apply custom name only for single icon
                 custom_name = args.name if len(remote_icons) == 1 and len(local_svgs) == 0 else None
-                success, error = download_icon_from_providers(icon_name, icons_dir, providers, custom_name)
+                success, error = download_icon_from_providers(icon_name, icons_dir, providers, custom_name, args.verbose)
                 if not success:
                     print_error(f"  Failed: {icon_name} - {error}")
                     failed_icons.append(f"{icon_name} ({error})")
@@ -1597,7 +1649,7 @@ Provider aliases:
         if local_svgs:
             # Apply custom name only for single local icon
             custom_name = args.name if len(local_svgs) == 1 and len(remote_icons) == 0 else None
-            failed_icons.extend(copy_local_svgs(local_svgs, icons_dir, custom_name))
+            failed_icons.extend(copy_local_svgs(local_svgs, icons_dir, custom_name, args.verbose))
 
         # Check we have at least one icon
         icon_count = len(list(icons_dir.glob("*.svg")))
@@ -1610,7 +1662,7 @@ Provider aliases:
 
         # Find fonts
         font_patterns = [p.strip() for p in args.fonts.split(",")]
-        fonts = find_fonts(font_patterns)
+        fonts = find_fonts(font_patterns, args.verbose)
         if not fonts:
             return 1
 
@@ -1619,13 +1671,15 @@ Provider aliases:
         if args.start:
             try:
                 start_cp = int(args.start, 16)
-                print_info(f"Using user-specified starting codepoint U+{start_cp:04X}")
+                if args.verbose:
+                    print_info(f"Using user-specified starting codepoint U+{start_cp:04X}")
             except ValueError:
                 print_error(f"Invalid hex codepoint: {args.start}")
                 return 1
 
         # Patch fonts
-        print_info("Patching fonts with icons...")
+        if args.verbose:
+            print_info("Patching fonts with icons...")
 
         all_mappings = []
         all_new_mappings = []
@@ -1633,13 +1687,15 @@ Provider aliases:
         for font_file in fonts:
             # Output uses same filename (patched font replaces original)
             out_name = font_file.name
-            print_info(f"  Patching {font_file.name}...")
+            if args.verbose:
+                print_info(f"  Patching {font_file.name}...")
 
             out_file = output_path / out_name
 
             try:
-                mappings, new_mappings = patch_font(font_file, icons_dir, out_file, start_cp, False, args.duplicate)
-                print_success(f"    Created: {out_name}")
+                mappings, new_mappings = patch_font(font_file, icons_dir, out_file, start_cp, False, args.duplicate, args.verbose)
+                if args.verbose:
+                    print_success(f"    Created: {out_name}")
 
                 if not all_mappings:
                     all_mappings = mappings
@@ -1649,11 +1705,11 @@ Provider aliases:
                 print_error(f"    Failed to patch {font_file.name}: {e}")
 
         if do_install:
-            install_fonts(output_path)
+            install_fonts(output_path, args.verbose)
 
         # Save log and display results
-        save_to_log(all_new_mappings)
-        display_mappings(all_mappings, all_new_mappings, output_path, do_install)
+        save_to_log(all_new_mappings, args.verbose)
+        display_mappings(all_mappings, all_new_mappings, output_path, do_install, args.verbose)
 
         # Report failed icons
         if failed_icons:
@@ -1665,12 +1721,13 @@ Provider aliases:
                 print_error(f"  - {failed}")
             print_warning("=" * 42)
 
-        print_success("=" * 42)
-        if do_install:
-            print_success("All done! Fonts installed and ready to use")
-            print_info(f"  Install location: {FONT_DIR_USER}")
-        else:
-            print_success(f"All done! Patched fonts saved to: {output_path}")
+        if args.verbose:
+            print_success("=" * 42)
+            if do_install:
+                print_success("All done! Fonts installed and ready to use")
+                print_info(f"  Install location: {FONT_DIR_USER}")
+            else:
+                print_success(f"All done! Patched fonts saved to: {output_path}")
             print_info("To install, run without --no-install flag")
 
     finally:
